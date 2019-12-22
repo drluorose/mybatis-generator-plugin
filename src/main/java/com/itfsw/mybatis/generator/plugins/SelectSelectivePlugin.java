@@ -265,16 +265,18 @@ public class SelectSelectivePlugin extends BasePlugin implements ISelectOneByExa
 
         if (byExample) {
             selectSelectiveEle.addElement(new TextElement("select"));
-            if (stringHasValue(introspectedTable.getSelectByExampleQueryId())) {
-                selectSelectiveEle.addElement(new TextElement("'" + introspectedTable.getSelectByExampleQueryId() + "' as QUERYID,"));
-            }
 
             if (!selectOne) {
                 // issues#20
                 XmlElement ifDistinctElement = new XmlElement("if");
-                ifDistinctElement.addAttribute(new Attribute("test", "example.distinct"));
+                ifDistinctElement.addAttribute(new Attribute("test", "example != null and example.distinct"));
                 ifDistinctElement.addElement(new TextElement("distinct"));
                 selectSelectiveEle.addElement(ifDistinctElement);
+            }
+
+            //issue#102
+            if (stringHasValue(introspectedTable.getSelectByExampleQueryId())) {
+                selectSelectiveEle.addElement(new TextElement("'" + introspectedTable.getSelectByExampleQueryId() + "' as QUERYID,"));
             }
         } else {
             selectSelectiveEle.addElement(new TextElement("select"));
@@ -287,10 +289,17 @@ public class SelectSelectivePlugin extends BasePlugin implements ISelectOneByExa
         selectSelectiveEle.addElement(new TextElement("from " + introspectedTable.getAliasedFullyQualifiedTableNameAtRuntime()));
 
         if (byExample) {
-            selectSelectiveEle.addElement(XmlElementGeneratorTools.getUpdateByExampleIncludeElement(introspectedTable));
+            XmlElement ifElement = new XmlElement("if");
+            ifElement.addAttribute(new Attribute("test", "example != null"));
+
+            XmlElement includeElement = new XmlElement("include");
+            includeElement.addAttribute(new Attribute("refid", introspectedTable.getMyBatis3UpdateByExampleWhereClauseId()));
+            ifElement.addElement(includeElement);
+
+            selectSelectiveEle.addElement(ifElement);
 
             XmlElement ifElement1 = new XmlElement("if");
-            ifElement1.addAttribute(new Attribute("test", "example.orderByClause != null"));
+            ifElement1.addAttribute(new Attribute("test", "example != null and example.orderByClause != null"));
             ifElement1.addElement(new TextElement("order by ${example.orderByClause}"));
             selectSelectiveEle.addElement(ifElement1);
         } else {
@@ -338,12 +347,17 @@ public class SelectSelectivePlugin extends BasePlugin implements ISelectOneByExa
         keysEle.addAttribute(new Attribute("collection", "selective"));
         keysEle.addAttribute(new Attribute("item", "column"));
         keysEle.addAttribute(new Attribute("separator", ","));
-        keysEle.addElement(new TextElement("${column.escapedColumnName}"));
+        keysEle.addElement(new TextElement("${column.aliasedEscapedColumnName}"));
 
         XmlElement otherwiseEle = new XmlElement("otherwise");
         chooseEle.addElement(otherwiseEle);
-        for (Element element : XmlElementGeneratorTools.generateKeys(introspectedTable.getAllColumns())) {
-            otherwiseEle.addElement(element);
+        // 存在关键词column或者table定义了alias属性,这里直接使用对应的ColumnListElement
+        if (introspectedTable.getRules().generateSelectByExampleWithBLOBs()) {
+            otherwiseEle.addElement(XmlElementGeneratorTools.getBaseColumnListElement(introspectedTable));
+            otherwiseEle.addElement(new TextElement(","));
+            otherwiseEle.addElement(XmlElementGeneratorTools.getBlobColumnListElement(introspectedTable));
+        } else {
+            otherwiseEle.addElement(XmlElementGeneratorTools.getBaseColumnListElement(introspectedTable));
         }
 
         return chooseEle;

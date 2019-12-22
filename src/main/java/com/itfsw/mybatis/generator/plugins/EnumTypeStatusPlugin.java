@@ -16,21 +16,18 @@
 
 package com.itfsw.mybatis.generator.plugins;
 
-import com.itfsw.mybatis.generator.plugins.utils.BasePlugin;
-import com.itfsw.mybatis.generator.plugins.utils.FormatTools;
-import com.itfsw.mybatis.generator.plugins.utils.IntrospectedTableTools;
-import com.itfsw.mybatis.generator.plugins.utils.JavaElementGeneratorTools;
+import com.itfsw.mybatis.generator.plugins.utils.*;
+import com.itfsw.mybatis.generator.plugins.utils.hook.ILogicalDeletePluginHook;
 import org.mybatis.generator.api.CommentGenerator;
 import org.mybatis.generator.api.IntrospectedColumn;
 import org.mybatis.generator.api.IntrospectedTable;
 import org.mybatis.generator.api.dom.java.*;
+import org.mybatis.generator.api.dom.xml.Document;
+import org.mybatis.generator.api.dom.xml.XmlElement;
 import org.mybatis.generator.internal.util.StringUtility;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,14 +39,20 @@ import java.util.regex.Pattern;
  * @time:2018/11/27 20:36
  * ---------------------------------------------------------------------------
  */
-public class EnumTypeStatusPlugin extends BasePlugin {
+public class EnumTypeStatusPlugin extends BasePlugin implements ILogicalDeletePluginHook {
+
+    /**
+     * 自动扫描
+     */
+    public final static String PRO_AUTO_SCAN = "autoScan";
+
     /**
      * 需要生成Enum的Column
      */
     public final static String PRO_ENUM_COLUMNS = "enumColumns";
-    public final static String REMARKS_PATTERN = ".*\\s*\\[\\s*(\\w+\\s*\\(\\s*[\\u4e00-\\u9fa5_a-zA-Z0-9]+\\s*\\)\\s*:\\s*[\\u4e00-\\u9fa5_a-zA-Z0-9]+\\s*\\,?\\s*)+\\s*\\]\\s*.*";
-    public final static String NEED_PATTERN = "\\[\\s*((\\w+\\s*\\(\\s*[\\u4e00-\\u9fa5_a-zA-Z0-9]+\\s*\\)\\s*:\\s*[\\u4e00-\\u9fa5_a-zA-Z0-9]+\\s*\\,?\\s*)+)\\s*\\]";
-    public final static String ITEM_PATTERN = "(\\w+)\\s*\\(\\s*([\\u4e00-\\u9fa5_a-zA-Z0-9]+)\\s*\\)\\s*:\\s*([\\u4e00-\\u9fa5_a-zA-Z0-9]+)";
+    public final static String REMARKS_PATTERN = ".*\\s*\\[\\s*(\\w+\\s*\\(\\s*[\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+\\s*\\)\\s*:\\s*[\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+\\s*\\,?\\s*)+\\s*\\]\\s*.*";
+    public final static String NEED_PATTERN = "\\[\\s*((\\w+\\s*\\(\\s*[\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+\\s*\\)\\s*:\\s*[\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+\\s*\\,?\\s*)+)\\s*\\]";
+    public final static String ITEM_PATTERN = "(\\w+)\\s*\\(\\s*([\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+)\\s*\\)\\s*:\\s*([\\u4e00-\\u9fa5_\\-a-zA-Z0-9]+)";
     private Map<String, EnumInfo> enumColumns;
 
     /**
@@ -60,35 +63,51 @@ public class EnumTypeStatusPlugin extends BasePlugin {
     public void initialized(IntrospectedTable introspectedTable) {
         super.initialized(introspectedTable);
         this.enumColumns = new LinkedHashMap<>();
+        String autoScan = this.getProperties().getProperty(PRO_AUTO_SCAN);
+        // 是否开启了自动扫描
+        if (StringUtility.stringHasValue(autoScan) && !StringUtility.isTrue(autoScan)) {
+            // 获取全局配置
+            String enumColumns = this.getProperties().getProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
+            // 如果有局部配置，则附加上去
+            String tableEnumColumns = introspectedTable.getTableConfigurationProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
+            if (tableEnumColumns != null) {
+                enumColumns = enumColumns == null ? "" : (enumColumns + ",");
 
-        // 获取全局配置
-        String enumColumns = this.getProperties().getProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
-        // 如果有局部配置，则附加上去
-        String tableEnumColumns = introspectedTable.getTableConfigurationProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
-        if (tableEnumColumns != null) {
-            enumColumns = enumColumns == null ? "" : (enumColumns + ",");
+                enumColumns += introspectedTable.getTableConfigurationProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
+            }
 
-            enumColumns += introspectedTable.getTableConfigurationProperty(EnumTypeStatusPlugin.PRO_ENUM_COLUMNS);
-        }
-
-        if (StringUtility.stringHasValue(enumColumns)) {
-            // 切分
-            String[] enumColumnsStrs = enumColumns.split(",");
-            for (String enumColumnsStr : enumColumnsStrs) {
-                IntrospectedColumn column = IntrospectedTableTools.safeGetColumn(introspectedTable, enumColumnsStr);
-                if (column != null) {
-                    try {
-                        EnumInfo enumInfo = new EnumInfo(column);
-                        // 解析注释
-                        enumInfo.parseRemarks(column.getRemarks());
-                        if (enumInfo.hasItems()) {
-                            this.enumColumns.put(column.getJavaProperty(), enumInfo);
+            if (StringUtility.stringHasValue(enumColumns)) {
+                // 切分
+                String[] enumColumnsStrs = enumColumns.split(",");
+                for (String enumColumnsStr : enumColumnsStrs) {
+                    IntrospectedColumn column = IntrospectedTableTools.safeGetColumn(introspectedTable, enumColumnsStr);
+                    if (column != null) {
+                        try {
+                            EnumInfo enumInfo = new EnumInfo(column);
+                            // 解析注释
+                            enumInfo.parseRemarks(column.getRemarks());
+                            if (enumInfo.hasItems()) {
+                                this.enumColumns.put(column.getJavaProperty(), enumInfo);
+                            }
+                        } catch (EnumInfo.CannotParseException e) {
+                            warnings.add("itfsw:插件" + EnumTypeStatusPlugin.class.getTypeName() + "没有找到column为" + enumColumnsStr.trim() + "对应格式的注释的字段！");
+                        } catch (EnumInfo.NotSupportTypeException e) {
+                            warnings.add("itfsw:插件" + EnumTypeStatusPlugin.class.getTypeName() + "找到column为" + enumColumnsStr.trim() + "对应Java类型不在支持范围内！");
                         }
-                    } catch (EnumInfo.CannotParseException e) {
-                        warnings.add("itfsw:插件" + EnumTypeStatusPlugin.class.getTypeName() + "没有找到column为" + enumColumnsStr.trim() + "对应格式的注释的字段！");
-                    } catch (EnumInfo.NotSupportTypeException e) {
-                        warnings.add("itfsw:插件" + EnumTypeStatusPlugin.class.getTypeName() + "找到column为" + enumColumnsStr.trim() + "对应Java类型不在支持范围内！");
                     }
+                }
+            }
+        } else {
+            for (IntrospectedColumn column : introspectedTable.getAllColumns()) {
+                try {
+                    EnumInfo enumInfo = new EnumInfo(column);
+                    // 解析注释
+                    enumInfo.parseRemarks(column.getRemarks());
+                    if (enumInfo.hasItems()) {
+                        this.enumColumns.put(column.getJavaProperty(), enumInfo);
+                    }
+                } catch (Exception e) {
+                    // nothing
                 }
             }
         }
@@ -107,6 +126,47 @@ public class EnumTypeStatusPlugin extends BasePlugin {
     }
 
     /**
+     * Model 生成
+     * 具体执行顺序 http://www.mybatis.org/generator/reference/pluggingIn.html
+     * @param topLevelClass
+     * @param introspectedTable
+     * @return
+     */
+    @Override
+    public boolean modelBaseRecordClassGenerated(TopLevelClass topLevelClass, IntrospectedTable introspectedTable) {
+        this.generateModelEnum(topLevelClass, introspectedTable);
+        return super.modelBaseRecordClassGenerated(topLevelClass, introspectedTable);
+    }
+
+    // ======================================= ILogicalDeletePluginHook ======================================
+
+
+    @Override
+    public boolean clientLogicalDeleteByExampleMethodGenerated(Method method, Interface interfaze, IntrospectedTable introspectedTable) {
+        return true;
+    }
+
+    @Override
+    public boolean clientLogicalDeleteByPrimaryKeyMethodGenerated(Method method, Interface interfaze, IntrospectedTable introspectedTable) {
+        return true;
+    }
+
+    @Override
+    public boolean sqlMapLogicalDeleteByExampleElementGenerated(Document document, XmlElement element, IntrospectedColumn logicalDeleteColumn, String logicalDeleteValue, IntrospectedTable introspectedTable) {
+        return true;
+    }
+
+    @Override
+    public boolean sqlMapLogicalDeleteByPrimaryKeyElementGenerated(Document document, XmlElement element, IntrospectedColumn logicalDeleteColumn, String logicalDeleteValue, IntrospectedTable introspectedTable) {
+        return true;
+    }
+
+    @Override
+    public boolean logicalDeleteEnumGenerated(IntrospectedColumn logicalDeleteColumn) {
+        return this.enumColumns.containsKey(logicalDeleteColumn.getJavaProperty());
+    }
+
+    /**
      * 生成对应enum
      * @param topLevelClass
      * @param introspectedTable
@@ -120,20 +180,6 @@ public class EnumTypeStatusPlugin extends BasePlugin {
             }
         }
     }
-
-    /**
-     * Model 生成
-     * 具体执行顺序 http://www.mybatis.org/generator/reference/pluggingIn.html
-     * @param topLevelClass
-     * @param introspectedTable
-     * @return
-     */
-    @Override
-    public boolean modelBaseRecordClassGenerated(TopLevelClass topLevelClass, IntrospectedTable introspectedTable) {
-        this.generateModelEnum(topLevelClass, introspectedTable);
-        return super.modelBaseRecordClassGenerated(topLevelClass, introspectedTable);
-    }
-
 
     public static class EnumInfo {
         private List<EnumItemInfo> items = new ArrayList<>();
